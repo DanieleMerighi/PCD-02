@@ -1,0 +1,21 @@
+{
+  "name": "fsstatlib-eventloop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "FSStatLib: Asynchronous (event-loop) implementation.",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "lib/FSStatLib.js",
+  "exports": {
+    ".": "./lib/FSStatLib.js"
+  },
+  "bin": {
+    "fsstat": "./app/cli.js"
+  },
+  "scripts": {
+    "start": "node app/cli.js \"/Users/danielemerighi/Documents/università/magistrale/PCD/slide\" 1048576 8",
+    "test": "node --test test/"
+  }
+}
