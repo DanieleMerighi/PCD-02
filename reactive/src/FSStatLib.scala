@@ -1,0 +1,40 @@
+package pcd.fsstatlib
+
+import io.reactivex.rxjava3.core.Flowable
+import io.reactivex.rxjava3.schedulers.Schedulers
+
+import java.nio.file.Path
+
+
+case class Report(fileCount: Int, sizeDistribution: Seq[(SizeBand, Int)])
+
+
+object FSStatLib:
+  
+  def getFSReportInteractive(startingDirectory: Path, upperSize: Long, boundedBandCount: Int): Flowable[Report] =
+    val files = FileTreeFlowable(startingDirectory)
+      .onBackpressureBuffer()
+    val sizes = files
+      .observeOn(Schedulers.computation())
+      .map: (path, attributes) =>
+        attributes.size()
+    given BandsSpec = BandsSpec(upperSize, boundedBandCount)
+    sizes
+      .scan(emptyReport, addToReport)
+      .map(prettifyResult)
+  
+  private case class InternalReport(fileCount: Int, sizeDistribution: Seq[Int])
+  
+  private def emptyReport(using bandsSpec: BandsSpec): InternalReport =
+    InternalReport(0, Seq.fill(bandsSpec.totalBandCount)(0))
+    
+  private def addToReport(report: InternalReport, size: Long)(using bandsSpec: BandsSpec): InternalReport =
+    val i = bandsSpec.findBandIndex(size)
+    InternalReport(
+      report.fileCount + 1,
+      report.sizeDistribution.mapAt(i, _ + 1)
+    )
+    
+  private def prettifyResult(report: InternalReport)(using bandsSpec: BandsSpec): Report =
+    Report(report.fileCount, bandsSpec.makeBands.zip(report.sizeDistribution))
+
