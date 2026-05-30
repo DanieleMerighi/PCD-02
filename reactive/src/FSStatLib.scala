@@ -2,6 +2,7 @@ package pcd.fsstatlib
 
 import io.reactivex.rxjava3.core.Flowable
 import io.reactivex.rxjava3.schedulers.Schedulers
+import io.reactivex.rxjava3.subjects.CompletableSubject
 
 import java.nio.file.Path
 
@@ -11,8 +12,8 @@ case class Report(fileCount: Int, sizeDistribution: Seq[(SizeBand, Int)])
 
 object FSStatLib:
   
-  def getFSReportInteractive(startingDirectory: Path, upperSize: Long, boundedBandCount: Int): Flowable[Report] =
-    val files = FileTreeFlowable(startingDirectory)
+  def getFSReportInteractive(startingDirectory: Path, upperSize: Long, boundedBandCount: Int, stopper: CompletableSubject): Flowable[Report] =
+    val files = FileTreeFlowable(startingDirectory, stopper)
       .onBackpressureBuffer()
     val sizes = files
       .observeOn(Schedulers.computation())

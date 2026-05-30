@@ -2,6 +2,7 @@ package pcd.fsstatlib
 
 import io.reactivex.rxjava3.core.{BackpressureStrategy, Flowable, FlowableEmitter}
 import io.reactivex.rxjava3.schedulers.Schedulers
+import io.reactivex.rxjava3.subjects.CompletableSubject
 
 import java.io.IOException
 import java.nio.file.attribute.BasicFileAttributes
@@ -10,11 +11,14 @@ import java.nio.file.{FileVisitResult, Files, Path, SimpleFileVisitor}
 
 object FileTreeFlowable:
 
-  def apply(startingDirectory: Path): Flowable[(Path, BasicFileAttributes)] =
+  def apply(startingDirectory: Path, stopper: CompletableSubject): Flowable[(Path, BasicFileAttributes)] =
 
     def source(emitter: FlowableEmitter[(Path, BasicFileAttributes)]): Unit =
+
       Files.walkFileTree(startingDirectory, new SimpleFileVisitor[Path]:
         override def visitFile(path: Path, attrs: BasicFileAttributes): FileVisitResult =
+          if stopper.hasComplete || emitter.isCancelled then
+            return FileVisitResult.TERMINATE
           if attrs.isRegularFile then
             emitter.onNext((path, attrs))
           FileVisitResult.CONTINUE
@@ -24,6 +28,7 @@ object FileTreeFlowable:
           FileVisitResult.SKIP_SUBTREE
       )
       emitter.onComplete()
+      stopper.onComplete()
     
     Flowable
       .create(source, BackpressureStrategy.MISSING) // handling backpressure is up to the caller

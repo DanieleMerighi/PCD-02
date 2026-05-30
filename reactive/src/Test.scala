@@ -1,6 +1,9 @@
 package pcd.fsstatlib
 
+import io.reactivex.rxjava3.subjects.CompletableSubject
+
 import java.nio.file.Path
+import java.util.concurrent.TimeUnit
 
 
 private def printReport(report: Report): Unit =
@@ -15,10 +18,18 @@ private def printReport(report: Report): Unit =
 
 @main
 def main(): Unit =
-  FSStatLib.getFSReportInteractive(Path.of("."), 20, 4)
-    .lastElement()
+  val startingDirectory = Path.of("/") // automatically maps to C:\ on Windows
+  IO.println(s"Scanning \"${startingDirectory.toAbsolutePath}\" for 5 seconds, reporting every 2 seconds...")
+  val stopper = CompletableSubject.create()
+  stopper.subscribe(() => IO.println("Stopping. Will now show any remaining report."))
+  Thread(() =>
+    Thread.sleep(5000)
+    stopper.onComplete() // stop early if still going
+  ).start()
+  FSStatLib.getFSReportInteractive(startingDirectory, 100_000, 10, stopper)
+    .throttleLatest(2, TimeUnit.SECONDS, emitLast = true)
+    .onBackpressureDrop()
     .blockingSubscribe(
       r => printReport(r),
       e => IO.println(s"Failed to access the starting directory: $e")
     )
-
