@@ -41,3 +41,4 @@ build/
 
 ### Scala ###
 .bsp/
+.idea/sbt.xml
