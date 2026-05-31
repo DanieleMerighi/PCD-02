@@ -18,13 +18,14 @@ private def printReport(report: Report): Unit =
 
 @main
 def main(): Unit =
-  val startingDirectory = Path.of("/") // automatically maps to C:\ on Windows
+  val startingDirectory = Path.of("/") // automatically maps to something like C:\ on Windows
   IO.println(s"Scanning \"${startingDirectory.toAbsolutePath}\" for 5 seconds, reporting every 2 seconds...")
   val stopper = CompletableSubject.create()
-  stopper.subscribe(() => IO.println("Stopping. Will now show any remaining report."))
   Thread(() =>
     Thread.sleep(5000)
-    stopper.onComplete() // stop early if still going
+    if !stopper.hasComplete then
+      IO.println("Stopping early. Will now show the last report.")
+      stopper.onComplete()
   ).start()
   FSStatLib.getFSReportInteractive(startingDirectory, 100_000, 10, stopper)
     .throttleLatest(2, TimeUnit.SECONDS, emitLast = true)
