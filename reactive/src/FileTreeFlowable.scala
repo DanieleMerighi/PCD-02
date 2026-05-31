@@ -1,36 +1,86 @@
 package pcd.fsstatlib
 
-import io.reactivex.rxjava3.core.{BackpressureStrategy, Flowable, FlowableEmitter}
+import io.reactivex.rxjava3.core.{Emitter, Flowable}
 import io.reactivex.rxjava3.schedulers.Schedulers
 import io.reactivex.rxjava3.subjects.CompletableSubject
 
 import java.io.IOException
 import java.nio.file.attribute.BasicFileAttributes
-import java.nio.file.{FileVisitResult, Files, Path, SimpleFileVisitor}
+import java.nio.file.{Files, LinkOption, Path}
+import scala.collection.mutable
+import scala.jdk.StreamConverters.StreamHasToScala
 
 
 object FileTreeFlowable:
 
   def apply(startingDirectory: Path, stopper: CompletableSubject): Flowable[(Path, BasicFileAttributes)] =
 
-    def source(emitter: FlowableEmitter[(Path, BasicFileAttributes)]): Unit =
+    val iterator = try
+        FileTreeIterator(startingDirectory)
+    catch
+      case e: IOException =>
+        stopper.onComplete()
+        return Flowable.error(e)
 
-      Files.walkFileTree(startingDirectory, new SimpleFileVisitor[Path]:
-        override def visitFile(path: Path, attrs: BasicFileAttributes): FileVisitResult =
-          if stopper.hasComplete || emitter.isCancelled then
-            return FileVisitResult.TERMINATE
-          if attrs.isRegularFile then
-            emitter.onNext((path, attrs))
-          FileVisitResult.CONTINUE
-        override def visitFileFailed(path: Path, e: IOException): FileVisitResult =
-          if path == startingDirectory then
-            emitter.onError(e)
-          FileVisitResult.SKIP_SUBTREE
-      )
-      emitter.onComplete()
-      stopper.onComplete()
-    
+    def generator(emitter: Emitter[(Path, BasicFileAttributes)]): Unit =
+      if !stopper.hasComplete && iterator.hasNext then
+        emitter.onNext(iterator.next())
+      else
+        emitter.onComplete()
+        stopper.onComplete()
+
     Flowable
-      .create(source, BackpressureStrategy.MISSING) // handling backpressure is up to the caller
+      .generate(generator)
       .subscribeOn(Schedulers.io())
+
+
+class FileTreeIterator(startingDirectory: Path) extends Iterator[(Path, BasicFileAttributes)]:
+
+  private val stack: mutable.Stack[Iterator[Path]] =
+    mutable.Stack(iterator(startingDirectory))
+  private var cachedNext: Option[(Path, BasicFileAttributes)] = None
+
+  override def next(): (Path, BasicFileAttributes) =
+    if cachedNext.isEmpty then
+      findNext()
+    val next = cachedNext.get
+    cachedNext = None
+    next
+
+  override def hasNext: Boolean =
+    if cachedNext.isEmpty then
+      findNext()
+    cachedNext.nonEmpty
+
+  private def findNext(): Unit =
+    while stack.nonEmpty do
+      if digNext() then
+        return
+
+  private def digNext(): Boolean =
+    val iter = stack.top
+    while iter.hasNext do
+      val path = iter.next()
+      try
+        if isDirectory(path) then
+          stack.push(iterator(path))
+          return false
+        else
+          val attr = readAttributes(path)
+          if attr.isRegularFile then
+            cachedNext = Some(path, attr)
+            return true
+      catch
+        case _: IOException =>
+    stack.pop()
+    false
+
+  private def iterator(path: Path): Iterator[Path] =
+    Files.list(path).toScala(Iterator)
+
+  private def isDirectory(path: Path): Boolean =
+    Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)
+
+  private def readAttributes(path: Path): BasicFileAttributes =
+    Files.readAttributes(path, classOf[BasicFileAttributes], LinkOption.NOFOLLOW_LINKS)
 

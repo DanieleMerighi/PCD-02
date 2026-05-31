@@ -34,3 +34,4 @@ def main(): Unit =
       r => printReport(r),
       e => println(s"Failed to access the starting directory: $e")
     )
+

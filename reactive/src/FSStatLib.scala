@@ -14,7 +14,6 @@ object FSStatLib:
   
   def getFSReportInteractive(startingDirectory: Path, upperSize: Long, boundedBandCount: Int, stopper: CompletableSubject): Flowable[Report] =
     val files = FileTreeFlowable(startingDirectory, stopper)
-      .onBackpressureBuffer()
     val sizes = files
       .observeOn(Schedulers.computation())
       .map: (path, attributes) =>
