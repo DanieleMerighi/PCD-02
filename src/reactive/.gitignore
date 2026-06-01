@@ -1,17 +1,12 @@
 target/
 !.mvn/wrapper/maven-wrapper.jar
-!**/src/**/target/
 
 ### IntelliJ IDEA ###
-.idea/modules.xml
-.idea/jarRepositories.xml
-.idea/compiler.xml
-.idea/libraries/
+.idea/
 *.iws
 *.iml
 *.ipr
 out/
-!**/src/**/out/
 
 ### Eclipse ###
 .apt_generated
@@ -22,7 +17,6 @@ out/
 .springBeans
 .sts4-cache
 bin/
-!**/src/**/bin/
 
 ### NetBeans ###
 /nbproject/private/
@@ -31,7 +25,6 @@ bin/
 /nbdist/
 /.nb-gradle/
 build/
-!**/src/**/build/
 
 ### VS Code ###
 .vscode/
@@ -41,4 +34,3 @@ build/
 
 ### Scala ###
 .bsp/
-.idea/sbt.xml
