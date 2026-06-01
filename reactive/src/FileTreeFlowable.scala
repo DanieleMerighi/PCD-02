@@ -6,7 +6,7 @@ import io.reactivex.rxjava3.subjects.CompletableSubject
 
 import java.io.IOException
 import java.nio.file.attribute.BasicFileAttributes
-import java.nio.file.{Files, LinkOption, Path}
+import java.nio.file.{Files, LinkOption, NoSuchFileException, NotDirectoryException, Path}
 import scala.collection.mutable
 import scala.jdk.StreamConverters.StreamHasToScala
 
@@ -36,6 +36,7 @@ object FileTreeFlowable:
 
 class FileTreeIterator(startingDirectory: Path) extends Iterator[(Path, BasicFileAttributes)]:
 
+  checkStartingDirectory()
   private val stack: mutable.Stack[Iterator[Path]] =
     mutable.Stack(iterator(startingDirectory))
   private var cachedNext: Option[(Path, BasicFileAttributes)] = None
@@ -74,6 +75,12 @@ class FileTreeIterator(startingDirectory: Path) extends Iterator[(Path, BasicFil
         case _: IOException =>
     stack.pop()
     false
+
+  private def checkStartingDirectory(): Unit =
+    if Files.notExists(startingDirectory, LinkOption.NOFOLLOW_LINKS) then
+      throw NoSuchFileException(startingDirectory.toString)
+    if !Files.isDirectory(startingDirectory, LinkOption.NOFOLLOW_LINKS) then
+      throw NotDirectoryException(startingDirectory.toString)
 
   private def iterator(path: Path): Iterator[Path] =
     Files.list(path).toScala(Iterator)
