@@ -6,7 +6,7 @@ import io.reactivex.rxjava3.subjects.CompletableSubject
 
 import java.io.IOException
 import java.nio.file.attribute.BasicFileAttributes
-import java.nio.file.{Files, LinkOption, NoSuchFileException, NotDirectoryException, Path}
+import java.nio.file.{DirectoryIteratorException, Files, LinkOption, NoSuchFileException, NotDirectoryException, Path}
 import scala.collection.mutable
 
 
@@ -36,7 +36,7 @@ object FileTreeFlowable:
 class FileTreeIterator(startingDirectory: Path) extends Iterator[(Path, BasicFileAttributes)]:
 
   private class DirectoryNode(path: Path) extends Iterator[Path], AutoCloseable:
-    private val stream = Files.list(path)
+    private val stream = Files.newDirectoryStream(path)
     private val iter = stream.iterator()
     export iter._, stream.close
 
@@ -76,7 +76,7 @@ class FileTreeIterator(startingDirectory: Path) extends Iterator[(Path, BasicFil
             cachedNext = Some(path, attr)
             return true
       catch
-        case _: IOException =>
+        case _: IOException | _: DirectoryIteratorException =>
     stack.pop().close()
     false
 
