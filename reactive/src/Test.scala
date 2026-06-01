@@ -27,7 +27,9 @@ def main(): Unit =
       println("Stopping early. Will now show the last report.")
       stopper.onComplete()
   ).start()
-  FSStatLib.getFSReportInteractive(startingDirectory, 100_000, 10, stopper)
+  val reports = FSStatLib.getFSReportInteractive(startingDirectory, 100_000, 10, Some(stopper))
+  reports.connect()
+  reports
     .throttleLatest(2, TimeUnit.SECONDS, emitLast = true)
     .onBackpressureDrop()
     .blockingSubscribe(

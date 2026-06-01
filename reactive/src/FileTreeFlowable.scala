@@ -13,7 +13,7 @@ import scala.jdk.StreamConverters.StreamHasToScala
 
 object FileTreeFlowable:
 
-  def apply(startingDirectory: Path, stopper: CompletableSubject): Flowable[(Path, BasicFileAttributes)] =
+  def apply(startingDirectory: Path, stopper: Option[CompletableSubject] = None): Flowable[(Path, BasicFileAttributes)] =
 
     val iterator = try
         FileTreeIterator(startingDirectory)
