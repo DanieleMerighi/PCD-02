@@ -27,13 +27,14 @@ object FileTreeFlowable:
       else
         emitter.onComplete()
         stopper.onComplete()
+        iterator.close()
 
     Flowable
       .generate(generator)
       .subscribeOn(Schedulers.io())
 
 
-class FileTreeIterator(startingDirectory: Path) extends Iterator[(Path, BasicFileAttributes)]:
+class FileTreeIterator(startingDirectory: Path) extends Iterator[(Path, BasicFileAttributes)], AutoCloseable:
 
   private class DirectoryNode(path: Path) extends Iterator[Path], AutoCloseable:
     private val stream = Files.newDirectoryStream(path)
@@ -91,4 +92,7 @@ class FileTreeIterator(startingDirectory: Path) extends Iterator[(Path, BasicFil
 
   private def readAttributes(path: Path): BasicFileAttributes =
     Files.readAttributes(path, classOf[BasicFileAttributes], LinkOption.NOFOLLOW_LINKS)
+
+  override def close(): Unit =
+    stack.foreach(_.close)
 
