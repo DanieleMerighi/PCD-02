@@ -8,7 +8,6 @@ import java.io.IOException
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.{Files, LinkOption, NoSuchFileException, NotDirectoryException, Path}
 import scala.collection.mutable
-import scala.jdk.StreamConverters.StreamHasToScala
 
 
 object FileTreeFlowable:
@@ -36,9 +35,14 @@ object FileTreeFlowable:
 
 class FileTreeIterator(startingDirectory: Path) extends Iterator[(Path, BasicFileAttributes)]:
 
+  private class DirectoryNode(path: Path) extends Iterator[Path], AutoCloseable:
+    private val stream = Files.list(path)
+    private val iter = stream.iterator()
+    export iter._, stream.close
+
   checkStartingDirectory()
-  private val stack: mutable.Stack[Iterator[Path]] =
-    mutable.Stack(iterator(startingDirectory))
+  private val stack: mutable.Stack[DirectoryNode] =
+    mutable.Stack(DirectoryNode(startingDirectory))
   private var cachedNext: Option[(Path, BasicFileAttributes)] = None
 
   override def next(): (Path, BasicFileAttributes) =
@@ -60,11 +64,11 @@ class FileTreeIterator(startingDirectory: Path) extends Iterator[(Path, BasicFil
 
   private def digNext(): Boolean =
     val iter = stack.top
-    while iter.hasNext do
+    while iter.hasNext() do
       val path = iter.next()
       try
         if isDirectory(path) then
-          stack.push(iterator(path))
+          stack.push(DirectoryNode(path))
           return false
         else
           val attr = readAttributes(path)
@@ -73,7 +77,7 @@ class FileTreeIterator(startingDirectory: Path) extends Iterator[(Path, BasicFil
             return true
       catch
         case _: IOException =>
-    stack.pop()
+    stack.pop().close()
     false
 
   private def checkStartingDirectory(): Unit =
@@ -81,9 +85,6 @@ class FileTreeIterator(startingDirectory: Path) extends Iterator[(Path, BasicFil
       throw NoSuchFileException(startingDirectory.toString)
     if !Files.isDirectory(startingDirectory, LinkOption.NOFOLLOW_LINKS) then
       throw NotDirectoryException(startingDirectory.toString)
-
-  private def iterator(path: Path): Iterator[Path] =
-    Files.list(path).toScala(Iterator)
 
   private def isDirectory(path: Path): Boolean =
     Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)
