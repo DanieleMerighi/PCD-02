@@ -30,8 +30,8 @@ def main(): Unit =
   val reports = FSStatLib.getFSReportInteractive(startingDirectory, 100_000, 10, Some(stopper))
   reports.connect()
   reports
-    .throttleLatest(2, TimeUnit.SECONDS, emitLast = true)
-    .onBackpressureDrop()
+    .sample(2, TimeUnit.SECONDS, emitLast = true)
+    .onBackpressureLatest()
     .blockingSubscribe(
       r => printReport(r),
       e => println(s"Failed to access the starting directory: $e")

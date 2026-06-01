@@ -11,7 +11,7 @@ case class Report(fileCount: Int, sizeDistribution: Seq[(SizeBand, Int)])
 
 
 object FSStatLib:
-  
+
   def getFSReportInteractive(startingDirectory: Path, upperSize: Long, boundedBandCount: Int, stopper: Option[CompletableSubject] = None): ConnectableFlowable[Report] =
     val files = FileTreeFlowable(startingDirectory, stopper)
     val sizes = files
@@ -23,10 +23,10 @@ object FSStatLib:
       .scan(emptyReport, addToReport)
       .map(prettifyResult)
     reports
-      .publish()
-  
+      .replay(1)
+
   private case class InternalReport(fileCount: Int, sizeDistribution: Seq[Int])
-  
+
   private def emptyReport(using bandsSpec: BandsSpec): InternalReport =
     InternalReport(0, Seq.fill(bandsSpec.totalBandCount)(0))
 
