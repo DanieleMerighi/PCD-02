@@ -5,81 +5,87 @@ import io.reactivex.rxjava3.schedulers.Schedulers
 import io.reactivex.rxjava3.subjects.CompletableSubject
 
 import java.io.IOException
+import java.nio.file.*
 import java.nio.file.attribute.BasicFileAttributes
-import java.nio.file.{DirectoryIteratorException, Files, LinkOption, NoSuchFileException, NotDirectoryException, Path}
-import scala.collection.mutable
+import java.util.concurrent.ConcurrentLinkedQueue
+import scala.jdk.CollectionConverters.IterableHasAsJava
 
 
 object FileTreeFlowable:
 
-  def apply(startingDirectory: Path, stopper: Option[CompletableSubject] = None): Flowable[(Path, BasicFileAttributes)] =
+  def apply(startingDirectory: Path,
+            stopper: Option[CompletableSubject] = None,
+            parallelism: Int = 1): Flowable[(Path, BasicFileAttributes)] =
 
     val iterator = try
-        FileTreeIterator(startingDirectory)
+      ConcurrentFileTreeIterator(startingDirectory)
     catch
       case e: IOException =>
         stopper.onComplete()
         return Flowable.error(e)
 
     def generator(emitter: Emitter[(Path, BasicFileAttributes)]): Unit =
-      if !stopper.hasComplete && iterator.hasNext then
-        emitter.onNext(iterator.next())
-      else
+      if stopper.hasComplete then
         emitter.onComplete()
-        stopper.onComplete()
-        iterator.close()
-
-    Flowable
-      .generate(generator)
-      .subscribeOn(Schedulers.io())
-
-
-class FileTreeIterator(startingDirectory: Path) extends Iterator[(Path, BasicFileAttributes)], AutoCloseable:
-
-  private class DirectoryNode(path: Path) extends Iterator[Path], AutoCloseable:
-    private val stream = Files.newDirectoryStream(path)
-    private val iter = stream.iterator()
-    export iter._, stream.close
-
-  checkStartingDirectory()
-  private val stack: mutable.Stack[DirectoryNode] =
-    mutable.Stack(DirectoryNode(startingDirectory))
-  private var cachedNext: Option[(Path, BasicFileAttributes)] = None
-
-  override def next(): (Path, BasicFileAttributes) =
-    if cachedNext.isEmpty then
-      findNext()
-    val next = cachedNext.get
-    cachedNext = None
-    next
-
-  override def hasNext: Boolean =
-    if cachedNext.isEmpty then
-      findNext()
-    cachedNext.nonEmpty
-
-  private def findNext(): Unit =
-    while stack.nonEmpty do
-      if digNext() then
         return
+      val next = iterator.tryNext
+      if next.nonEmpty then
+        emitter.onNext(next.get)
+        return
+      emitter.onComplete()
+      stopper.onComplete()
 
-  private def digNext(): Boolean =
-    val iter = stack.top
-    while iter.hasNext() do
-      val path = iter.next()
+    val sources = (0 until parallelism).map: _ =>
+      Flowable
+        .generate(generator)
+        .subscribeOn(Schedulers.io())
+    Flowable
+      .merge(sources.asJava)
+      .doAfterTerminate(() => iterator.close())
+
+
+class ConcurrentFileTreeIterator(startingDirectory: Path):
+
+  private val queue = ConcurrentLinkedQueue[DirectoryNode]()
+  checkStartingDirectory()
+  queue.offer(DirectoryNode(startingDirectory))
+
+  private case class DirectoryNode(path: Path):
+    private val stream = Files.newDirectoryStream(path)
+    private val iterator = stream.iterator()
+    def close(): Unit = synchronized:
+      stream.close()
+    def tryNext: Option[Path] = synchronized:
+      Option.when(iterator.hasNext)(iterator.next())
+
+  def tryNext: Option[(Path, BasicFileAttributes)] =
+    while true do
+      val node = queue.peek()
+      if node == null then
+        return Option.empty
+      val next = tryNext(node)
+      if next.nonEmpty then
+        return Some(next.get)
+    null // unreachable
+
+  private def tryNext(node: DirectoryNode): Option[(Path, BasicFileAttributes)] =
+    while true do
       try
-        if isDirectory(path) then
-          stack.push(DirectoryNode(path))
-          return false
+        val path = node.tryNext
+        if path.isEmpty then
+          queue.remove(node)
+          node.close()
+          return None
         else
-          val attr = readAttributes(path)
-          if attr.isRegularFile then
-            cachedNext = Some(path, attr)
-            return true
+          val attributes = readAttributes(path.get)
+          if attributes.isDirectory then
+            queue.offer(DirectoryNode(path.get))
+            return None
+          else if attributes.isRegularFile then
+            return Some((path.get, attributes))
       catch
         case _: IOException | _: DirectoryIteratorException =>
-    stack.pop().close()
-    false
+    null // unreachable
 
   private def checkStartingDirectory(): Unit =
     if Files.notExists(startingDirectory, LinkOption.NOFOLLOW_LINKS) then
@@ -87,12 +93,9 @@ class FileTreeIterator(startingDirectory: Path) extends Iterator[(Path, BasicFil
     if !Files.isDirectory(startingDirectory, LinkOption.NOFOLLOW_LINKS) then
       throw NotDirectoryException(startingDirectory.toString)
 
-  private def isDirectory(path: Path): Boolean =
-    Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)
-
   private def readAttributes(path: Path): BasicFileAttributes =
     Files.readAttributes(path, classOf[BasicFileAttributes], LinkOption.NOFOLLOW_LINKS)
 
-  override def close(): Unit =
-    stack.foreach(_.close)
+  def close(): Unit =
+    queue.forEach(_.close())
 

@@ -12,8 +12,14 @@ case class Report(fileCount: Int, sizeDistribution: Seq[(SizeBand, Int)])
 
 object FSStatLib:
 
-  def getFSReportInteractive(startingDirectory: Path, upperSize: Long, boundedBandCount: Int, stopper: Option[CompletableSubject] = None): ConnectableFlowable[Report] =
-    val files = FileTreeFlowable(startingDirectory, stopper)
+  private val DEFAULT_PARALLELISM = 8
+
+  def getFSReportInteractive(startingDirectory: Path,
+                             upperSize: Long,
+                             boundedBandCount: Int,
+                             stopper: Option[CompletableSubject] = None,
+                             parallelism: Int = DEFAULT_PARALLELISM): ConnectableFlowable[Report] =
+    val files = FileTreeFlowable(startingDirectory, stopper, parallelism)
     val sizes = files
       .observeOn(Schedulers.computation())
       .map: (path, attributes) =>
