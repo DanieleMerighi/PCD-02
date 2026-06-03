@@ -1,98 +1,49 @@
 package pcd.fsstatlib
 
-import io.reactivex.rxjava3.core.{Emitter, Flowable}
+import io.reactivex.rxjava3.core.Flowable
 import io.reactivex.rxjava3.schedulers.Schedulers
 import io.reactivex.rxjava3.subjects.CompletableSubject
 
 import java.io.IOException
 import java.nio.file.attribute.BasicFileAttributes
-import java.nio.file.{DirectoryIteratorException, Files, LinkOption, NoSuchFileException, NotDirectoryException, Path}
-import scala.collection.mutable
+import java.nio.file.{DirectoryIteratorException, DirectoryStream, Files, LinkOption, NoSuchFileException, NotDirectoryException, Path}
 
 
 object FileTreeFlowable:
 
   def apply(startingDirectory: Path, stopper: Option[CompletableSubject] = None): Flowable[(Path, BasicFileAttributes)] =
-
-    val iterator = try
-        FileTreeIterator(startingDirectory)
-    catch
-      case e: IOException =>
-        stopper.onComplete()
-        return Flowable.error(e)
-
-    def generator(emitter: Emitter[(Path, BasicFileAttributes)]): Unit =
-      if !stopper.hasComplete && iterator.hasNext then
-        emitter.onNext(iterator.next())
-      else
-        emitter.onComplete()
-        stopper.onComplete()
-        iterator.close()
-
-    Flowable
-      .generate(generator)
+    val source: Flowable[(Path, BasicFileAttributes)] =
+      startingDirectoryError(startingDirectory) match
+        case Some(e) => Flowable.error(e)
+        case None    => walk(startingDirectory)
+    val files = stopper match
+      case Some(s) => source.takeUntil(s.toFlowable[(Path, BasicFileAttributes)])
+      case None    => source
+    files
+      .doOnTerminate(() => stopper.onComplete())
       .subscribeOn(Schedulers.io())
 
+  private def startingDirectoryError(directory: Path): Option[IOException] =
+    if Files.notExists(directory, LinkOption.NOFOLLOW_LINKS) then
+      Some(NoSuchFileException(directory.toString))
+    else if !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS) then
+      Some(NotDirectoryException(directory.toString))
+    else None
 
-class FileTreeIterator(startingDirectory: Path) extends Iterator[(Path, BasicFileAttributes)], AutoCloseable:
+  private def visit(entry: Path): Flowable[(Path, BasicFileAttributes)] =
+    try
+      if Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS) then
+        Flowable.defer(() => walk(entry)).onErrorComplete()
+      else
+        val attr = Files.readAttributes(entry, classOf[BasicFileAttributes], LinkOption.NOFOLLOW_LINKS)
+        if attr.isRegularFile then Flowable.just((entry, attr))
+        else Flowable.empty()
+    catch
+      case _ => Flowable.empty()
 
-  private class DirectoryNode(path: Path) extends Iterator[Path], AutoCloseable:
-    private val stream = Files.newDirectoryStream(path)
-    private val iter = stream.iterator()
-    export iter._, stream.close
-
-  checkStartingDirectory()
-  private val stack: mutable.Stack[DirectoryNode] =
-    mutable.Stack(DirectoryNode(startingDirectory))
-  private var cachedNext: Option[(Path, BasicFileAttributes)] = None
-
-  override def next(): (Path, BasicFileAttributes) =
-    if cachedNext.isEmpty then
-      findNext()
-    val next = cachedNext.get
-    cachedNext = None
-    next
-
-  override def hasNext: Boolean =
-    if cachedNext.isEmpty then
-      findNext()
-    cachedNext.nonEmpty
-
-  private def findNext(): Unit =
-    while stack.nonEmpty do
-      if digNext() then
-        return
-
-  private def digNext(): Boolean =
-    val iter = stack.top
-    while iter.hasNext() do
-      val path = iter.next()
-      try
-        if isDirectory(path) then
-          stack.push(DirectoryNode(path))
-          return false
-        else
-          val attr = readAttributes(path)
-          if attr.isRegularFile then
-            cachedNext = Some(path, attr)
-            return true
-      catch
-        case _: IOException | _: DirectoryIteratorException =>
-    stack.pop().close()
-    false
-
-  private def checkStartingDirectory(): Unit =
-    if Files.notExists(startingDirectory, LinkOption.NOFOLLOW_LINKS) then
-      throw NoSuchFileException(startingDirectory.toString)
-    if !Files.isDirectory(startingDirectory, LinkOption.NOFOLLOW_LINKS) then
-      throw NotDirectoryException(startingDirectory.toString)
-
-  private def isDirectory(path: Path): Boolean =
-    Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)
-
-  private def readAttributes(path: Path): BasicFileAttributes =
-    Files.readAttributes(path, classOf[BasicFileAttributes], LinkOption.NOFOLLOW_LINKS)
-
-  override def close(): Unit =
-    stack.foreach(_.close)
-
+  private def walk(path: Path): Flowable[(Path, BasicFileAttributes)] =
+    Flowable.using(
+      () => Files.newDirectoryStream(path),
+      (stream: DirectoryStream[Path]) => Flowable.fromIterable(stream).concatMap(visit),
+      (stream: DirectoryStream[Path]) => stream.close()
+    )
