@@ -17,7 +17,7 @@ private def printReport(report: Report): Unit =
 
 
 @main
-def main(): Unit =
+def test(): Unit =
   val startingDirectory = Path.of("/") // automatically maps to something like C:\ on Windows
   println(s"Scanning \"${startingDirectory.toAbsolutePath}\" for 5 seconds, reporting every 2 seconds...")
   val stopper = CompletableSubject.create()
