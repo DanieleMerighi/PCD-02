@@ -1,6 +1,6 @@
 package pcd.fsstatlib
 
-import io.reactivex.rxjava3.core.{BackpressureStrategy, Observable}
+import io.reactivex.rxjava3.core.{Observable, Observer}
 import io.reactivex.rxjava3.subjects.{CompletableSubject, PublishSubject}
 
 import java.awt.{Component, Dimension}
@@ -10,7 +10,7 @@ import javax.swing.*
 
 
 class ReactiveFileChooser(showObservable: Observable[Unit],
-                          pathSubject: PublishSubject[Path],
+                          pathObserver: Observer[Path],
                           parent: Component) extends JFileChooser:
 
   private val dialog = createDialog(parent)
@@ -27,77 +27,69 @@ class ReactiveFileChooser(showObservable: Observable[Unit],
   commandSubject
     .filter(JFileChooser.APPROVE_SELECTION == _)
     .map(_ => getSelectedFile.toPath)
-    .subscribe(pathSubject)
-
-
-private def formatReport(report: Report): String =
-  def formatBand(band: SizeBand): String = band match
-    case SizeBand.Bounded(lower, upper) => s"[$lower, $upper]"
-    case SizeBand.BoundedBelow(lower) => s"[$lower, ...]"
-  val bandLines = report.sizeDistribution
-    .map: (band, count) =>
-      s"${formatBand(band)}: $count files."
-    .mkString("\n")
-  s"""Reporting a total of ${report.fileCount} files:
-     |$bandLines
-     |""".stripMargin
+    .subscribe(pathObserver)
 
 
 class Frame extends JFrame("FSStat GUI"):
+
+  private val UPPER_SIZE = 100_000
+  private val BOUNDED_BAND_COUNT = 10
+
   setSize(600, 400)
   setResizable(false)
   setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE)
   private val panel = JPanel()
 
-  private val pathSubject = PublishSubject.create[Path]()
-
   private val pathButtonSubject = PublishSubject.create[Unit]()
   private val pathButton = JButton("Choose")
   pathButton.setPreferredSize(Dimension(80, 30))
   pathButton.addActionListener(_ => pathButtonSubject.onNext(()))
-  pathSubject.subscribe(_ => startButton.setEnabled(true))
 
+  private val pathSubject = PublishSubject.create[Path]()
   private val pathChooser = ReactiveFileChooser(pathButtonSubject, pathSubject, this)
   pathChooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY)
+  pathSubject.subscribe(path =>
+    pathField.setText(path.toString)
+    reportField.setText("")
+    val stopper = CompletableSubject.create()
+    stopSubject.subscribe(_ => stopper.onComplete())
+    stopper.subscribe(() => stopSubject.onNext(()))
+    val reports = FSStatLib.getFSReportInteractive(path, UPPER_SIZE, BOUNDED_BAND_COUNT, Some(stopper))
+    startSubject.subscribe(_ => reports.connect())
+    startButton.setEnabled(true)
+    reports
+      .sample(100, TimeUnit.MILLISECONDS, emitLast = true)
+      .subscribe(
+        r => reportField.setText(r.formatToString),
+        e => reportField.setText(s"Failed to access the starting directory:\n$e")
+      )
+  )
 
   private val pathField = JTextField()
   pathField.setPreferredSize(Dimension(400, 32))
   pathField.setEditable(false)
-  pathSubject.subscribe(path => pathField.setText(path.toString))
-
-  private val reports = pathSubject
-    .toFlowable(BackpressureStrategy.LATEST)
-    .flatMap(path =>
-      val stopper = CompletableSubject.create()
-      stopSubject.subscribe(_ => stopper.onComplete())
-      stopper.subscribe(() => stopSubject.onNext(()))
-      val reports = FSStatLib.getFSReportInteractive(path, 100000, 10, Some(stopper))
-      startSubject.subscribe(_ => reports.connect())
-      reports
-    )
 
   private val reportField = JTextArea()
   reportField.setPreferredSize(Dimension(400, 300))
-
-  reports
-    .sample(200, TimeUnit.MILLISECONDS, emitLast = true)
-    .onBackpressureLatest()
-    .subscribe(r => reportField.setText(formatReport(r)))
 
   private val startSubject = PublishSubject.create[Unit]()
   private val startButton = JButton("Start")
   startButton.setEnabled(false)
   startButton.addActionListener(_ => startSubject.onNext(()))
-  startSubject.subscribe(_ => pathButton.setEnabled(false))
-  startSubject.subscribe(_ => startButton.setEnabled(false))
-  startSubject.subscribe(_ => stopButton.setEnabled(true))
+  startSubject.subscribe(_ =>
+    pathButton.setEnabled(false)
+    startButton.setEnabled(false)
+    stopButton.setEnabled(true)
+  )
 
   private val stopSubject = PublishSubject.create[Unit]()
   private val stopButton = JButton("Stop")
   stopButton.setEnabled(false)
   stopButton.addActionListener(_ => stopSubject.onNext(()))
-  stopSubject.subscribe(_ => pathButton.setEnabled(true))
-  stopSubject.subscribe(_ => stopButton.setEnabled(false))
+  stopSubject.subscribe(_ =>
+    pathButton.setEnabled(true)
+    stopButton.setEnabled(false)
+  )
 
   panel.add(pathField)
   panel.add(pathButton)

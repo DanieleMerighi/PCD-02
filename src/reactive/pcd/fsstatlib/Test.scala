@@ -6,16 +6,6 @@ import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
 
-private def printReport(report: Report): Unit =
-  def formatBand(band: SizeBand): String = band match
-    case SizeBand.Bounded(lower, upper) => s"[$lower, $upper]"
-    case SizeBand.BoundedBelow(lower) => s"[$lower, ...]"
-  println(s"Reporting a total of ${report.fileCount} files:")
-  for (band, count) <- report.sizeDistribution do
-    println(s"${formatBand(band)}: $count files.")
-  println("End of report.")
-
-
 @main
 def test(): Unit =
   val startingDirectory = Path.of("/") // automatically maps to something like C:\ on Windows
@@ -31,9 +21,8 @@ def test(): Unit =
   reports.connect()
   reports
     .sample(2, TimeUnit.SECONDS, emitLast = true)
-    .onBackpressureLatest()
     .blockingSubscribe(
-      r => printReport(r),
+      r => println(r.formatToString),
       e => println(s"Failed to access the starting directory: $e")
     )
 
