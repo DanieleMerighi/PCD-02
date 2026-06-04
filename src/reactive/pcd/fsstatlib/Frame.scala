@@ -1,12 +1,16 @@
 package pcd.fsstatlib
 
 import io.reactivex.rxjava3.core.{Observable, Observer}
+import io.reactivex.rxjava3.schedulers.Schedulers
 import io.reactivex.rxjava3.subjects.{CompletableSubject, PublishSubject}
 
 import java.awt.{Component, Dimension}
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 import javax.swing.*
+
+
+val EDT_SCHEDULER = Schedulers.from(SwingUtilities.invokeLater(_))
 
 
 class ReactiveFileChooser(showObservable: Observable[Unit],
@@ -17,12 +21,16 @@ class ReactiveFileChooser(showObservable: Observable[Unit],
   setDialogType(JFileChooser.OPEN_DIALOG)
   dialog.setModal(true)
 
-  showObservable.subscribe(_ => dialog.setVisible(true))
+  showObservable
+    .observeOn(EDT_SCHEDULER)
+    .subscribe(_ => dialog.setVisible(true))
 
   private val commandSubject = PublishSubject.create[String]()
   addActionListener(e => commandSubject.onNext(e.getActionCommand))
 
-  commandSubject.subscribe(_ => dialog.setVisible(false))
+  commandSubject
+    .observeOn(EDT_SCHEDULER)
+    .subscribe(_ => dialog.setVisible(false))
 
   commandSubject
     .filter(JFileChooser.APPROVE_SELECTION == _)
@@ -32,8 +40,8 @@ class ReactiveFileChooser(showObservable: Observable[Unit],
 
 class Frame extends JFrame("FSStat GUI"):
 
-  private val UPPER_SIZE = 100_000
-  private val BOUNDED_BAND_COUNT = 10
+  private val upperSize = 100_000
+  private val boundedBandCount = 10
 
   setSize(600, 400)
   setResizable(false)
@@ -48,22 +56,28 @@ class Frame extends JFrame("FSStat GUI"):
   private val pathSubject = PublishSubject.create[Path]()
   private val pathChooser = ReactiveFileChooser(pathButtonSubject, pathSubject, this)
   pathChooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY)
-  pathSubject.subscribe(path =>
-    pathField.setText(path.toString)
-    reportField.setText("")
-    val stopper = CompletableSubject.create()
-    stopSubject.subscribe(_ => stopper.onComplete())
-    stopper.subscribe(() => stopSubject.onNext(()))
-    val reports = FSStatLib.getFSReportInteractive(path, UPPER_SIZE, BOUNDED_BAND_COUNT, Some(stopper))
-    startSubject.subscribe(_ => reports.connect())
-    startButton.setEnabled(true)
-    reports
-      .sample(100, TimeUnit.MILLISECONDS, emitLast = true)
-      .subscribe(
-        r => reportField.setText(r.formatToString),
-        e => reportField.setText(s"Failed to access the starting directory:\n$e")
-      )
-  )
+  pathSubject
+    .observeOn(EDT_SCHEDULER)
+    .subscribe(path =>
+      pathField.setText(path.toString)
+      reportField.setText("")
+      startButton.setEnabled(true)
+    )
+  pathSubject
+    .subscribe(path =>
+      val stopper = CompletableSubject.create()
+      stopSubject.subscribe(_ => stopper.onComplete())
+      stopper.subscribe(() => stopSubject.onNext(()))
+      val reports = FSStatLib.getFSReportInteractive(path, upperSize, boundedBandCount, Some(stopper))
+      startSubject.subscribe(_ => reports.connect())
+      reports
+        .observeOn(EDT_SCHEDULER)
+        .sample(100, TimeUnit.MILLISECONDS, emitLast = true)
+        .subscribe(
+          r => reportField.setText(r.formatToString),
+          e => reportField.setText(s"Failed to access the starting directory:\n$e")
+        )
+    )
 
   private val pathField = JTextField()
   pathField.setPreferredSize(Dimension(400, 32))
@@ -76,20 +90,24 @@ class Frame extends JFrame("FSStat GUI"):
   private val startButton = JButton("Start")
   startButton.setEnabled(false)
   startButton.addActionListener(_ => startSubject.onNext(()))
-  startSubject.subscribe(_ =>
-    pathButton.setEnabled(false)
-    startButton.setEnabled(false)
-    stopButton.setEnabled(true)
-  )
+  startSubject
+    .observeOn(EDT_SCHEDULER)
+    .subscribe(_ =>
+      pathButton.setEnabled(false)
+      startButton.setEnabled(false)
+      stopButton.setEnabled(true)
+    )
 
   private val stopSubject = PublishSubject.create[Unit]()
   private val stopButton = JButton("Stop")
   stopButton.setEnabled(false)
   stopButton.addActionListener(_ => stopSubject.onNext(()))
-  stopSubject.subscribe(_ =>
-    pathButton.setEnabled(true)
-    stopButton.setEnabled(false)
-  )
+  stopSubject
+    .observeOn(EDT_SCHEDULER)
+    .subscribe(_ =>
+      pathButton.setEnabled(true)
+      stopButton.setEnabled(false)
+    )
 
   panel.add(pathField)
   panel.add(pathButton)
