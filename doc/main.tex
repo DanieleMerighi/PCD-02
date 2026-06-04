@@ -1,0 +1,96 @@
+\documentclass{scrartcl}
+\usepackage[utf8]{inputenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{amsmath}
+
+\usepackage{cleveref} % this must be the last package to be loaded
+
+% --- Listings setup for JavaScript -----------------------------------------
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codekw}{rgb}{0.13,0.29,0.53}
+\definecolor{codestr}{rgb}{0.16,0.5,0.16}
+\lstdefinestyle{js}{
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\color{codekw}\bfseries,
+  commentstyle=\color{codegray}\itshape,
+  stringstyle=\color{codestr},
+  showstringspaces=false,
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  language=Java, % close enough for async/await highlighting
+  morekeywords={async,await,const,let,of,=>},
+  frame=single,
+  framesep=4pt,
+  rulecolor=\color{codegray!40},
+}
+
+\title{\LARGE
+  FSStat
+}
+\subtitle{Concurrent and Distributed Programming\\a.y. 2025--2026}
+
+\author{
+    Buda Marco \and Merighi Daniele \and Turchi Jacopo
+}
+
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{Asynchronous Programming based on Event Loops}
+
+This version implements \texttt{FSStatLib} on the Node.js runtime, whose concurrency model is a single-threaded \emph{event loop} driving non-blocking I/O. The design adheres strictly to this discipline: all asynchrony is expressed through \texttt{Promise}s and the \texttt{async}/\texttt{await} syntax, and no worker threads are introduced. The public method has the signature \texttt{getFSReport(D, MaxFS, NB)} and returns a \texttt{Promise} that resolves to the report, i.e. the total file count and the $NB + 1$ size bands.
+
+\subsection{Problem Analysis}
+
+From a concurrent standpoint, producing the report is an \textbf{I/O-bound} problem rather than a CPU-bound one. The actual computation, classifying each file size into a band, is negligible. The cost is dominated by filesystem metadata operations (\texttt{readdir} on directories, \texttt{stat} on files), each of which is a request to the operating system that completes after some latency.
+
+This observation reframes the goal of concurrency. There is no heavy calculation to spread across cores: a purely sequential traversal would spend most of its time \emph{idle}, blocked waiting on the disk or the OS cache. The opportunity is instead to keep many I/O operations \emph{in flight at the same time}, so that their latencies overlap and the program progresses while individual requests are pending.
+
+Two aspects are particularly relevant for the design:
+
+\begin{itemize}
+    \item \textbf{Unbounded parallel task generation.} The directory tree has unknown shape and depth and is discovered incrementally. A naive ``launch everything at once'' strategy would try to open thousands of file descriptors simultaneously, exhausting the per-process OS limit (an \texttt{EMFILE} error). The degree of concurrency must therefore be \emph{bounded} explicitly.
+    \item \textbf{Aggregation of shared state.} The total counter and the histogram are updated by many logically concurrent tasks. Crucially, however, the event loop executes JavaScript callbacks \emph{one at a time} on a single thread: there is no true parallelism, hence no data races on this shared state. Synchronisation reduces to the cooperative interleaving of tasks at \texttt{await} points, which removes the need for the monitors and locks that characterise a thread-based solution.
+\end{itemize}
+
+\subsection{Strategy and Design}
+
+Because there are no threads, the program has no \emph{active} components in the classical sense: the single control flow is the event loop itself, which dequeues and runs ready continuations. The architecture is consequently a small set of cooperating \emph{passive} modules, illustrated in the data flow from \texttt{getFSReport} down to the leaf \texttt{stat} calls.
+
+\paragraph{Parallel execution with \texttt{Promise.all}.}
+The traversal is a recursive \texttt{walk} function that embodies a structured fork/join pattern. For a directory it reads the entries, maps each one to a \texttt{Promise}, and awaits them collectively with \texttt{Promise.all}. Sub-directories recurse, regular files are queried via \texttt{stat} and counted, and a directory's \texttt{walk} resolves only once its whole subtree has been processed.
+
+\begin{lstlisting}[style=js]
+async function walk(dir, ctx) {
+  const entries = await ctx.semaphore.run(
+      () => readdir(dir, { withFileTypes: true }));
+  // fork: one branch per entry; join: await all of them
+  await Promise.all(entries.map(
+      (entry) => handleEntry(dir, entry, ctx)));
+}
+\end{lstlisting}
+
+This shape lets the whole tree be explored concurrently: many directories and files are visited in parallel from the point of view of the program, even though, at the machine level, only the I/O is genuinely overlapped while the JavaScript runs sequentially.
+
+\paragraph{Bounding concurrency with an asynchronous semaphore.}
+To prevent the unbounded parallel task generation from exhausting file descriptors, every operation that consumes one (\texttt{readdir} and \texttt{stat}) is wrapped by an \texttt{AsyncSemaphore}, a counting semaphore adapted to the event loop. \texttt{acquire()} returns an already-resolved \texttt{Promise} when a permit is available, otherwise it returns a pending \texttt{Promise} whose \texttt{resolve} function is queued. The \texttt{release()} method then hands a permit to the next waiter, if any. The \texttt{run(task)} helper acquires, awaits the task, and releases in a \texttt{finally} block.
+
+With a default of 64 permits, at most 64 I/O operations are ever in flight, regardless of how large the tree is. The semaphore thus acts as a flow-control mechanism: excess tasks simply queue up as pending promises and are admitted as permits are freed. This is the single most important concurrency decision of the design, as it decouples the (potentially huge) logical concurrency from the (bounded) physical concurrency that the OS can sustain.
+
+\paragraph{Lock-free aggregation.}
+The histogram and the file counter are plain passive objects mutated by the \texttt{onFile} callback. No locking is needed: thanks to the run-to-completion semantics of the event loop, each callback body runs to the end without being interrupted, and the only suspension points are the explicit \texttt{await}s. The mutations therefore execute atomically with respect to one another, even though dozens of \texttt{handleEntry} promises are outstanding. This is a direct benefit of the cooperative, single-threaded model and stands in sharp contrast to a thread-based version, where the same aggregation would require a synchronised monitor.
+
+\paragraph{Robustness.}
+A few cases are handled to keep the scan well-behaved. Symbolic links are skipped, which avoids both traversal cycles and accidentally escaping the target subtree. The root is validated with \texttt{lstat} up front, so a non-directory argument fails fast with a clear error instead of silently yielding an empty report. Finally, errors on individual entries (e.g. permission denied) are captured in a \texttt{skippedEntries} list rather than aborting the whole traversal, so a single unreadable directory does not invalidate the report.
+
+\end{document}
