@@ -71,8 +71,8 @@ class Frame extends JFrame("FSStat GUI"):
       val reports = FSStatLib.getFSReportInteractive(path, upperSize, boundedBandCount, Some(stopper))
       startSubject.subscribe(_ => reports.connect())
       reports
-        .observeOn(EDT_SCHEDULER)
         .sample(100, TimeUnit.MILLISECONDS, emitLast = true)
+        .observeOn(EDT_SCHEDULER)
         .subscribe(
           r => reportField.setText(r.formatToString),
           e => reportField.setText(s"Failed to access the starting directory:\n$e")

@@ -30,6 +30,22 @@
   framesep=4pt,
   rulecolor=\color{codegray!40},
 }
+% --- Listings setup for Scala -----------------------------------------
+\lstdefinestyle{scala}{
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\color{codekw}\bfseries,
+  commentstyle=\color{codegray}\itshape,
+  stringstyle=\color{codestr},
+  showstringspaces=false,
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  language=Java, % close enough for async/await highlighting
+  morekeywords={val},
+  frame=single,
+  framesep=4pt,
+  rulecolor=\color{codegray!40},
+}
 
 \title{\LARGE
   FSStat
@@ -92,5 +108,80 @@ The histogram and the file counter are plain passive objects mutated by the \tex
 
 \paragraph{Robustness.}
 A few cases are handled to keep the scan well-behaved. Symbolic links are skipped, which avoids both traversal cycles and accidentally escaping the target subtree. The root is validated with \texttt{lstat} up front, so a non-directory argument fails fast with a clear error instead of silently yielding an empty report. Finally, errors on individual entries (e.g. permission denied) are captured in a \texttt{skippedEntries} list rather than aborting the whole traversal, so a single unreadable directory does not invalidate the report.
+
+\section{Reactive programming using ReactiveX}
+
+This version implements \texttt{FSStatLib} by conceptualizing the entire problem in terms of streams of data and events, then by programming them in Scala using the RxJava library and its standard operators. The nature of this paradigm also made it sufficiently straightforward to extend the solution to include the proposed \textit{interactive} functionalities, as described in the assignment's \textbf{Optional point}.
+
+The resulting public method has the signature \texttt{getFSReportInteractive(D, MaxFS, NB, stopper)}, where the returned value is a \texttt{ConnectableObservable} of reports, i.e. a \textit{hot} stream, and \texttt{stopper} is a \texttt{CompletableSubject} providing the ability to terminate the dynamic stream of updates prematurely.
+
+A simple Graphical User Interface was also added, so as to provide an effective way to showcase these additional functionalities.
+
+\subsection{Domain Modeling}
+
+Due to the declarative essence of reactive programming, finding a way to model the problem is enough to also get a working strategy, along with a nearly one-to-one mapping to the final implementation code. For this analysis, we adopt a series of marble diagrams as a concise way to show the overall behavior.
+
+The problem can be broken down into two main challenges: generating a stream of files from the recursive traversal of the starting directory and processing it to obtain a stream of reports.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{images/reactive_files.png}
+    \caption{Generation of a stream of files from the recursive traversal of a file tree.}
+    \label{fig:reactive_files}
+\end{figure}
+
+\Cref{fig:reactive_files} shows an example of the \texttt{walk(path)} function in action, which solves the first subproblem. When applied to a regular file, it simply returns a stream with that file as its only value. When applied to a directory, it instead calls itself recursively on each of the contained files and flattens out the results by leveraging the \texttt{flatMap} operator.
+
+The entire process is guaranteed to be performed on designated I/O threads thanks to the call to \texttt{subscribeOn(Schedulers.io())}. This solution can also be easily made parallel by using the operator \texttt{flatMap(mapper, maxConcurrency)} provided by RxJava out of the box.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{images/reactive_main.png}
+    \caption{Processing of a stream of files into a stream of reports.}
+    \label{fig:reactive_main}
+\end{figure}
+
+\Cref{fig:reactive_main} shows the solution to the second subproblem, which starts by extracting the file sizes using the \texttt{map} operator, then combines them into reports. Again, each report keeps track of the total number of files and the distribution between the different size bands at a given time.
+
+The transformation from sizes to reports is done by first defining a function to update a report based on a new given file size, then by passing it to the \texttt{scan} operator, which takes care of emitting all intermediate results. All of these transformations are scheduled as computation thanks to call to \texttt{observeOn(Schedulers.computation())}.
+
+The ability to interrupt the stream prematurely is implemented by applying the \texttt{takeUntil} operator, which disposes of the entire upstream whenever the \texttt{stopper} subject completes.
+
+In the end, the stream of reports is published as a \textit{hot} stream. \Cref{sec:lazyness_and_backpressure} describes the full reasoning behind the choice of \textit{cold}/\textit{hot} streams at the different stages.
+
+\subsection{Graphical Interface}
+
+The included showcase program was developed using Java Swing components and maintaining the reactive programming approach. All buttons and other UI elements are configured to emit on specialized \texttt{PublishSubject}s and all visual updates are set to take place through the subscription to data or event streams, while using a custom scheduler to ensure that they are executed on the Event Dispatch Thread.
+
+\begin{lstlisting}[style=scala]
+val EDT_SCHEDULER = Schedulers.from(SwingUtilities.invokeLater(_))
+\end{lstlisting}
+
+The interface includes a dialog to assist in the selection of the starting directory, buttons to start and stop the underlying computations, and a text area where the live statistics are shown. \Cref{fig:gui} shows a snapshot of the program's execution.
+
+The statistics are set to update no more than 10 times per second, so as to not overwhelm the user and to avoid a waste of cpu time. This is done by applying the \texttt{sample} operator with an interval of 100 milliseconds, while making sure that the last report is always emitted.
+
+\begin{lstlisting}[style=scala]
+reports
+  .sample(100, TimeUnit.MILLISECONDS, emitLast = true)
+  .observeOn(EDT_SCHEDULER)
+  .subscribe(...)
+\end{lstlisting}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{images/gui.png}
+    \caption{A capture of the program's interface.}
+    \label{fig:gui}
+\end{figure}
+
+\subsection{Lazyness and Backpressure}
+\label{sec:lazyness_and_backpressure}
+
+When considering the end result, computing statistics on a directory imposes the strict requirement that no file is ever skipped (except for unavoidable I/O errors). For this reason, most of the program's computation makes use of \textit{cold} Observables, which are lazy and operate on a pull model, thus preventing any form of backpressure.
+
+Only at the end is the stream of reports published as a \textit{hot} Observable. At this point, ensuring that every value gets consumed is no longer relevant. In fact, it is expected that subscribers may only want to consider updates at given time intervals, as is the case for our showcase program. In this context, the push model is clearly a better fit.
+
+Still, no specific backpressure strategy is required, as the periodic sampling already takes care of discarding unwanted updates, motivating the usage of Observables as opposed to the more advanced Flowables. 
 
 \end{document}

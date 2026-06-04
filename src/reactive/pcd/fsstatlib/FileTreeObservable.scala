@@ -20,7 +20,7 @@ object FileTreeObservable:
       val stream = Files.newDirectoryStream(path)
       Observable
         .fromIterable(stream)
-        .concatMap(path =>
+        .flatMap(path =>
           Observable
             .defer(() => walk(path))
             .onErrorComplete() // Just skip problematic files/subtrees
