@@ -182,6 +182,41 @@ When considering the end result, computing statistics on a directory imposes the
 
 Only at the end is the stream of reports published as a \textit{hot} Observable. At this point, ensuring that every value gets consumed is no longer relevant. In fact, it is expected that subscribers may only want to consider updates at given time intervals, as is the case for our showcase program. In this context, the push model is clearly a better fit.
 
-Still, no specific backpressure strategy is required, as the periodic sampling already takes care of discarding unwanted updates, motivating the usage of Observables as opposed to the more advanced Flowables. 
+Still, no specific backpressure strategy is required, as the periodic sampling already takes care of discarding unwanted updates, motivating the usage of Observables as opposed to the more advanced Flowables.
+
+\section{Virtual Threads}
+This version implements \texttt{FSStatLib} using Java Virtual Threads, an implementation of lightweight java threads. The concurrency model relies on a thread-per-task paradigm, allowing high concurrency.
+
+\subsection{Problem Analysis}
+Traversing a file system and reading data is inherently an I/O-bound operation.
+\begin{itemize}
+    \item \textbf{Blocking I/O:} Standard filesystem calls such as Files.isDirectory and Files.size block the executing thread while awaiting completion from the operating system.
+    \item \textbf{OS Thread Limits:} In traditional Java concurrency, mapping one OS (platform) thread to each directory traversal leads rapidly to resource exhaustion due to the high memory footprint of OS thread stacks and severe context-switching overhead.
+    \item \textbf{Virtual Thread Utility:} Virtual threads detach the thread abstraction from the underlying OS threads. Upon encountering a blocking I/O operation, the JVM unmounts the virtual thread, freeing the carrier thread to execute other virtual threads. This permits thousands of concurrent I/O operations without depleting system threads.
+\end{itemize}
+
+\subsection{Strategy and Design}
+The solution implements a recursive map-reduce architecture coordinated by a virtual thread executor.
+
+\paragraph{Thread-per-task execution.}
+\texttt{Executors.newVirtualThreadPerTaskExecutor()} is instantiated for the lifecycle of the task. For each subdirectory encountered during traversal, a new asynchronous task is submitted to this executor. The directory tree branches are discovered and processed concurrently.
+
+\paragraph{Lock-free aggregation.}
+Shared mutable state and explicit locking mechanisms (e.g., \texttt{synchronized} monitors) are avoided.
+\begin{itemize}
+    \item Each directory processing task instantiates a local \texttt{FSReport} initialized with an empty size \texttt{distribution} array and a file counter.
+    \item The task processes regular files sequentially within its scope, updating local counters.
+    \item Subdirectory tasks return a \texttt{Future<FSReport>}. The parent task waits for its subtasks to complete via \texttt{task.get()} and utilizes the \texttt{FSReport.merge()} function to compute the sum of the data records.
+\end{itemize}
+This fork-join pattern guarantees data safety mechanically without external synchronization, building the report bottom up.
+
+\paragraph{Asynchronous entry point.}
+To prevent blocking the main thread while the executor coordinates the tree traversal, the root execution task is wrapped in a \texttt{FutureTask} and launched on a virtual thread via \texttt{Thread.ofVirtual().start(rootTask)}. The caller receives the \texttt{FutureTask} handle immediately.
+
+\begin{lstlisting}[style=scala]
+try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+    return computeDirectory(Path.of(d), maxFS, nb, executor);
+} // The executor implicitly waits for all submitted tasks to complete before closing
+\end{lstlisting}
 
 \end{document}
