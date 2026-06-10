@@ -212,7 +212,7 @@ Traversing a file system and reading data is inherently an I/O-bound operation.
 \end{itemize}
 
 \subsection{Strategy and Design}
-The solution implements a recursive map-reduce architecture coordinated by a virtual thread executor.
+The architecture follows a recursive fork-join pattern managed by a virtual thread executor .
 
 \paragraph{Thread-per-task execution.}
 \texttt{Executors.newVirtualThreadPerTaskExecutor()} is instantiated for the lifecycle of the task. For each subdirectory encountered during traversal, a new asynchronous task is submitted to this executor. The directory tree branches are discovered and processed concurrently.
@@ -224,7 +224,7 @@ Shared mutable state and explicit locking mechanisms (e.g., \texttt{synchronized
     \item The task processes regular files sequentially within its scope, updating local counters.
     \item Subdirectory tasks return a \texttt{Future<FSReport>}. The parent task waits for its subtasks to complete via \texttt{task.get()} and utilizes the \texttt{FSReport.merge()} function to compute the sum of the data records.
 \end{itemize}
-This fork-join pattern guarantees data safety mechanically without external synchronization, building the report bottom up.
+This fork-join pattern ensures thread safety without synchronization, building the report bottom-up.
 
 \paragraph{Asynchronous entry point.}
 To prevent blocking the main thread while the executor coordinates the tree traversal, the root execution task is wrapped in a \texttt{FutureTask} and launched on a virtual thread via \texttt{Thread.ofVirtual().start(rootTask)}. The caller receives the \texttt{FutureTask} handle immediately.
