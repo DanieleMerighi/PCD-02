@@ -47,6 +47,22 @@
   rulecolor=\color{codegray!40},
 }
 
+% --- Listings setup for Java -----------------------------------------
+\lstdefinestyle{java}{
+    basicstyle=\ttfamily\footnotesize,
+    keywordstyle=\color{codekw}\bfseries,
+    commentstyle=\color{codegray}\itshape,
+    stringstyle=\color{codestr},
+    showstringspaces=false,
+    breaklines=true,
+    columns=fullflexible,
+    keepspaces=true,
+    language=Java,
+    frame=single,
+    framesep=4pt,
+    rulecolor=\color{codegray!40},
+}
+
 \title{\LARGE
   FSStat
 }
@@ -213,7 +229,7 @@ This fork-join pattern guarantees data safety mechanically without external sync
 \paragraph{Asynchronous entry point.}
 To prevent blocking the main thread while the executor coordinates the tree traversal, the root execution task is wrapped in a \texttt{FutureTask} and launched on a virtual thread via \texttt{Thread.ofVirtual().start(rootTask)}. The caller receives the \texttt{FutureTask} handle immediately.
 
-\begin{lstlisting}[style=scala]
+\begin{lstlisting}[style=java]
 try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
     return computeDirectory(Path.of(d), maxFS, nb, executor);
 } // The executor implicitly waits for all submitted tasks to complete before closing
